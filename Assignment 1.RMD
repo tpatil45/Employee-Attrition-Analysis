@@ -1,0 +1,577 @@
+#Assignment 1
+##Association Rules Mining - Employee Attrition Data
+
+##R Shiny App link - Tejas Patil
+##### [https://tpatil45.shinyapps.io/HW01/]
+  
+#####Importing the dataset (in this case a csv file) into R and saving it into another dataframe (empdata) so that we have backup of original dataset
+```{r}
+empdata1 <- read.csv(file.choose())
+empdata <- empdata1
+```
+
+#####Checking the structure of dataframe to know all the variables. Since we have to work on association rules mining, we will need all the variables to be in factor form. Checking the summary to know the statistics of the variables and scanning all the variables for NA's.
+```{r}
+#str(empdata)
+#summary(empdata)
+```
+
+#####To get the count of NA's in every column we use "apply" providing "sum" function as an argument for "fun".
+```{r}
+#apply(is.na(empdata), 2, sum)
+```
+
+#####"Over18", "EmployeeCount" and "StandardHours" have only one level. It means there is no variation in that entire column. If associattion rules mining model is used over them, they can lead to false rules or rules with no meaning and increase the performance time. Hence, deleting those variables instead.
+```{r}
+empdata <- empdata[, -which(colnames(empdata) == "Over18")]
+empdata <- empdata[, -which(colnames(empdata) == "EmployeeCount")]
+empdata <- empdata[, -which(colnames(empdata) == "StandardHours")]
+```
+
+#####Gender variable has 3 levels. They are namely "Male", "Female" and a black space. We need to select that cell and replace it with the mode of "Gender" column.
+```{r}
+which(empdata$Gender != "Male" & empdata$Gender != "Female")
+empdata$Gender[1062] <- "Male"
+empdata$Gender <- as.factor(trimws(empdata$Gender))
+```
+
+#####OverTime variable has 3 levels. They are namely "Yes", "No" and a black space. We need to select that cell and replace it with the mode of "OverTime" column.
+```{r}
+which(empdata$OverTime != "No" & empdata$OverTime != "Yes")
+empdata$OverTime[1013] <- "No"
+empdata$OverTime <- as.factor(trimws(empdata$OverTime))
+```
+  
+#####Are Hourly, Daily, Monthly Rate proportional? These 3 variables can be related to each other by the fact of 24 hours in a day and 30 days in a month. If such is the case then, we can delete two of those variables as they will have the same effects over "attrition" variable. Checking if these variables are proportional to each other!
+```{r}
+#empdata$DailyRate/empdata$HourlyRate
+```
+#####No, they are not porportional, so each variable has its own significance
+
+
+#####"EmployeeNumber" is the identification number and it is unique for every employee. Eventually, it is unique in every observation. Hence, removing that variable from the dataset. 
+```{r}
+empdata <- empdata[, -which(colnames(empdata) == "EmployeeNumber")]
+```
+  
+#####Since in the final dataset we want all variables to be in factor form, we can convert the some numerical variables directly into factor datatype. These variables need to have limited number of unique values in them.
+```{r}
+empdata$Education <- as.factor(empdata$Education)
+empdata$EnvironmentSatisfaction <- as.factor(empdata$EnvironmentSatisfaction)
+empdata$JobInvolvement <- as.factor(empdata$JobInvolvement)
+empdata$JobLevel <- as.factor(empdata$JobLevel)
+empdata$JobSatisfaction <- as.factor(empdata$JobSatisfaction)
+empdata$PerformanceRating <- as.factor(empdata$PerformanceRating)
+empdata$RelationshipSatisfaction <- as.factor(empdata$RelationshipSatisfaction)
+empdata$StockOptionLevel <- as.factor(empdata$StockOptionLevel)
+empdata$TrainingTimesLastYear <- as.factor(empdata$TrainingTimesLastYear)
+empdata$WorkLifeBalance <- as.factor(empdata$WorkLifeBalance)
+```
+
+*Checking newly transformed factor variables* \n
+*If they can be more efficient by reducing the levels*
+```{r}
+summary(empdata)
+```
+
+  
+#####Since we have NA's present in the factor variables, we can impute the mode (most frequent) value of that column in place of NA's!  
+```{r}
+which(is.na(empdata$JobLevel))
+empdata$JobLevel[89] <- names(sort(table(empdata$JobLevel), decreasing = T))[1]
+
+which(is.na(empdata$PerformanceRating))
+empdata$PerformanceRating[10] <-
+  names(sort(table(empdata$PerformanceRating), decreasing = T))[1]
+  
+which(is.na(empdata$RelationshipSatisfaction))
+empdata$RelationshipSatisfaction[33] <-
+  names(sort(table(empdata$RelationshipSatisfaction), decreasing = T))[1]  
+```
+ 
+# Exploratory Data Analysis #  
+
+##Part 1##
+## Bining the Data ##
+
+*Saving this data*
+```{r}
+empdata2 <- empdata
+```
+
+#####Writing a function that can convert any numerical variable into categorical. After categorizing, 4 levels will be created into the transformed variable. Those 4 levels will be based on 4 quantiles of the original variable. Also, NA's will be created in place of 0th percentile because of Left closed intervals. Those will be assigned first category.
+```{r}
+qaunt_cat <- function(x,y){ 
+  x[,y] <- cut(x[,y], breaks = quantile(x[,y], c(0,0.25,0.5,0.75,1)),
+               labels = paste0(colnames(x)[y], "-Q", 1:4))
+  x[which(is.na(x[,y])),y] <- paste(colnames(x)[y], sep = "-","Q1")
+  return(x[,y])
+}
+```
+
+#####Writing a function to treat any numerical variable for outliers. Inter quartile method will be used to treat the outliers. They will be winsorized to value of 1.5*IQR from Q1 or Q3.
+```{r}
+Out_Treat_W = function(x){
+  Q1 = quantile(x, 0.25)
+  Q3 = quantile(x, 0.75)
+  IQR = Q3 - Q1
+  LC = Q1 - 1.5*IQR
+  UC = Q3 + 1.5*IQR
+  Out_Count = sum(x > UC | x < LC)
+  UOut <- which(x > UC)
+  LOut <- which(x < LC)
+  for (i in 1:length(UOut)){
+    x[UOut[i]] <- UC
+  }
+  for (i in 1:length(LOut)){
+    x[LOut[i]] <- LC
+  }
+  OutInfo = list(TotalOutliers = Out_Count, LCutoff = LC, UCutoff = UC)
+  print(OutInfo)
+  return(x)
+}
+```
+
+#####HourlyRate, DailyRate, MonthlyRate###
+```{r}
+hist(empdata$HourlyRate, main = "Hist: HourlyRate")   #Histogram - Hourly Rate
+hist(empdata$DailyRate, main = "Hist: DailyRate")    #Histogram - Daily Rate
+hist(empdata$MonthlyRate, main = "Hist: MonthlyRate")  #Histogram - Monthly Rate
+```
+
+#####All 3 variables have platykurtic distribution
+
+```{r}
+boxplot(empdata$HourlyRate, main = "Boxplot: HourlyRate")
+boxplot(empdata$DailyRate, main = "Boxplot: DailyRate")
+boxplot(empdata$MonthlyRate, main = "Boxplot: MonthlyRate")
+```
+
+#####These 3 variables do not have outliers in them. Referenc: boxplot
+
+#####Categorizing the data into 4 quantiles using the quan_cat function
+*Hourly Rate*
+```{r}
+which(colnames(empdata2) == "HourlyRate")
+empdata2[,11] <- qaunt_cat(empdata2, 11)
+```
+
+*Daily Rate*
+```{r}
+which(colnames(empdata2) == "DailyRate")
+empdata2[,4] <- qaunt_cat(empdata2, 4)
+```
+
+*Montly Rate*
+```{r}
+which(colnames(empdata2) == "MonthlyRate")
+empdata2[,18] <- qaunt_cat(empdata2, 18)
+```
+
+**Categorizing Age Variable**
+```{r}
+hist(empdata2$Age, breaks = 30, main = "Hist: Age")
+summary(empdata2$Age)
+summary(empdata2$Age[which(empdata2$Attrition == "Yes")])
+summary(empdata2$Age[which(empdata2$Attrition == "No")])
+```
+
+#####Age follows normal distribution very closely. The mean value for "attrition = Yes" is quite less than "attrition = No". Hence, categorizing Age into categories 18-27, 27-39 and 39-60.
+```{r}
+empdata2$Age <- cut(empdata2$Age, breaks = quantile(empdata2$Age, c(0,0.25,0.75,1)),
+              labels = c("Age<27","Age-27-39","Age>39"))
+empdata2$Age[which(is.na(empdata2$Age))] <- "Age<27"
+```
+
+**Categorizing DistanceFromHome Variable**
+```{r}
+table(empdata2$DistanceFromHome)
+```
+
+#####It seems like the value "224" is an outlier. We will make it 29, which is the second highest value but not an outlier.
+```{r}
+empdata2$DistanceFromHome[which(empdata2$DistanceFromHome == 224)] <- 29
+```
+
+#####Treating the NA: This variable has a skewed distribution, since median is not qual to the mean. Hence, replacing the NA's with median value.
+```{r}
+hist(empdata2$DistanceFromHome, breaks = 30, main = "Hist: DistanceFromHome")
+empdata2$DistanceFromHome[which(is.na(empdata2$DistanceFromHome))] <- 
+  median(empdata2$DistanceFromHome, na.rm = T)
+```
+
+#####Categorizing the data into 4 quantiles using the quan_cat function.
+```{r}
+which(colnames(empdata2) == "DistanceFromHome")
+empdata2[,6] <- qaunt_cat(empdata2, 6)
+```
+
+**Categorizing MonthlyIncome Variable** \n
+
+#####Plotting the histogram and Boxplot for monthly income
+```{r}
+hist(empdata2$MonthlyIncome, breaks = 30, main = "Hist: MonthlyIncome") #Histogram: MonthlyIncome
+boxplot(empdata2$MonthlyIncome, main = "Boxplot: MonthlyIncome") #Boxplot: MonthlyIncome
+```
+
+#####The boxplot tells us that there are outliers in the data. Let's use our outlier winsorizing function to treat the outliers. Outliers will be made equal to the value of 1.5*IQR.
+```{r}
+empdata2$MonthlyIncome <- Out_Treat_W(empdata2$MonthlyIncome)
+```
+
+#####Categorizing the data into 4 quantiles using the quan_cat function
+```{r}
+which(colnames(empdata2) == "MonthlyIncome")
+empdata2[,17] <- qaunt_cat(empdata2, 17)
+```
+
+**Categorizing NumCompaniesWorked variable** \n
+
+#####Checking the proportion of people with "Attrition=Yes" with respect to the number of companies they worked for.
+```{r}
+All_Emp <- table(empdata2$NumCompaniesWorked)
+Atr_Yes_Emp <- table(empdata2$NumCompaniesWorked[which(empdata2$Attrition == "Yes")])
+Atr_Yes_Emp/All_Emp
+```
+
+#####It is observed that Attrition rate is nearly twice for people who worked in more than 4 companies. Hence, we will be categorizing the data as companies less than 4 or more than 4.
+```{r}
+empdata2$NumCompaniesWorked <- cut(empdata2$NumCompaniesWorked,
+  breaks = quantile(empdata2$NumCompaniesWorked, c(0,0.75,1)),
+    labels = c("Comp_Worked<=4","Comp_Worked>4"))
+empdata2$NumCompaniesWorked[which(is.na(empdata2$NumCompaniesWorked))] <- "Comp_Worked<=4"
+```
+
+**Categorizing PercentSalaryHike Variable** \n
+
+#####Plotting histogram to check the distribution
+```{r}
+hist(empdata2$PercentSalaryHike, breaks = 15, main = "Hist: PercentSalaryHike")
+```
+
+#####Treating the NA: This variable has a skewed distribution, since median is not qual to the mean. Hence, replacing the NA's with median value.
+```{r}
+summary(empdata2$PercentSalaryHike)
+empdata2$PercentSalaryHike[which(is.na(empdata2$PercentSalaryHike))] <- 
+  median(empdata2$PercentSalaryHike, na.rm = T)
+```
+
+#####Categorizing the data into 4 quantiles using the quan_cat function
+```{r}
+which(colnames(empdata2) == "PercentSalaryHike")
+empdata2[,21] <- qaunt_cat(empdata2, 21)
+```
+
+**Categorizing TotalWorkingYears Variable** \n
+
+#####Observing the count of frequency distribution of total working years.
+```{r}
+table(empdata2$TotalWorkingYears)
+```
+
+#####Treating the NA: This variable has a skewed distribution, since median is not qual to the mean. Hence, replacing the NA's with median value.
+```{r}
+summary(empdata2$TotalWorkingYears)
+empdata2$TotalWorkingYears[which(is.na(empdata2$TotalWorkingYears))] <- 
+  median(empdata2$TotalWorkingYears, na.rm = T)
+```
+
+#####Categorizing the data into 4 quantiles using the quan_cat function
+```{r}
+which(colnames(empdata2) == "TotalWorkingYears")
+empdata2[,25] <- qaunt_cat(empdata2, 25)
+```
+
+**Categorizing YearsAtCompany Variable** \n
+
+#####Observing the count of frequency distribution of YearsAtCompany.
+```{r}
+table(empdata2$YearsAtCompany)
+summary(empdata2$YearsAtCompany)
+```
+
+#####Categorizing the data into 4 quantiles using the quan_cat function
+```{r}
+which(colnames(empdata2) == "YearsAtCompany")
+empdata2[,28] <- qaunt_cat(empdata2, 28)
+```
+
+**Categorizing YearsSinceLastPromotion Variable** \n
+
+#####Observing the count of frequency distribution of YearsSinceLastPromotion
+```{r}
+summary(empdata2$YearsSinceLastPromotion)
+table(empdata2$YearsSinceLastPromotion)
+```
+
+#####Treating the NA: This variable has a skewed distribution, since median is not qual to the mean. Hence, replacing the NA's with median value.
+```{r}
+empdata2$YearsSinceLastPromotion[which(is.na(empdata2$YearsSinceLastPromotion))] <- 
+  median(empdata2$YearsSinceLastPromotion, na.rm = T)
+```
+
+#####We see here that the 0th percentile and the 25th percentile are the same. Hence, we'll have to skip 1st quartile while categorizing.
+```{r}
+empdata2$YearsSinceLastPromotion <- cut(empdata2$YearsSinceLastPromotion,
+  breaks = quantile(empdata2$YearsSinceLastPromotion, c(0,0.5,0.75,1)),
+    labels = c("Last_Promo-Q1Q2","Last_Promo-Q3","Last_Promo-Q4"))
+empdata2$YearsSinceLastPromotion[which(is.na(empdata2$YearsSinceLastPromotion))] <-
+  "Last_Promo-Q1Q2"
+```
+
+**Categorizing YearsInCurrentRole & YearsWithCurrManager** \n
+
+#####Observing the count of frequency distribution of YearsInCurrentRole & YearsWithCurrManager
+```{r}
+table(empdata2$YearsInCurrentRole)
+table(empdata2$YearsWithCurrManager)
+```
+
+#####We can see the high resemblance in these two variables. Hence, checking for the correlation between two variables.
+```{r}
+cor(empdata2$YearsInCurrentRole, empdata2$YearsWithCurrManager)
+```
+
+#####Categorizing the data into 4 quantiles using the quan_cat function.
+```{r}
+which(colnames(empdata2) == "YearsInCurrentRole")
+empdata2[,29] <- qaunt_cat(empdata2, 29)
+which(colnames(empdata2) == "YearsWithCurrManager")
+empdata2[,31] <- qaunt_cat(empdata2, 31)
+```
+
+*Final_Check*
+```{r}
+summary(empdata2)
+```
+
+
+#Part 2#
+
+##Plotting the Dependent vs Independent variable Bar Charts##
+*Importing the ggplot2 library*
+```{r}
+library(ggplot2)
+```
+
+**MaritalStatus vs Attrition** \n
+
+#####It is clearly seen and understood that single people are more likely to cause attrition. 24.7% of singles are responsible for attrition, that figure is more than twice of that for Married and Divorced people.
+```{r}
+ggplot(empdata2, aes(Attrition, group = MaritalStatus)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~MaritalStatus) + 
+  scale_y_continuous(labels = scales::percent)
+```
+
+**OverTime vs Attrition** \n
+
+#####People who do overtime are more likely to cause attrition. This leads us to believing that money might be a factor causing people to leave their job as people do overtime to earn extra momney.
+```{r}
+ggplot(empdata2, aes(Attrition, group = OverTime)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~OverTime) + 
+  scale_y_continuous(labels = scales::percent)
+```
+
+**JobSatisfaction vs Attrition** \n
+
+#####It is pretty obvious that if a person is not satisfied by his job, he'll definitely move. Attrition percentage goes on increasing as the satisfaction level decreases.
+```{r}
+ggplot(empdata2, aes(Attrition, group = JobSatisfaction)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~JobSatisfaction) + 
+  scale_y_continuous(labels = scales::percent)    
+```
+
+**EnvironmentSatisfaction vs Attrition** \n
+
+#####It shows the same trends as seen with job satisfaction. As the satisfaction level decreses, the chances are more that employee will cause attrition.
+```{r}
+ggplot(empdata2, aes(Attrition, group = EnvironmentSatisfaction)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~EnvironmentSatisfaction) + 
+  scale_y_continuous(labels = scales::percent)    
+```
+  
+**MonthlyIncome vs Attrition** \n
+
+#####Company needs to take care of employees that are paid less than 4000 bucks momnthly. 30% of employees from 1st quantile are more likely to cause attrition.
+```{r}
+ggplot(empdata2, aes(Attrition, group = MonthlyIncome)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~MonthlyIncome) + 
+  scale_y_continuous(labels = scales::percent)  
+```
+
+**WorkLifeBalance vs Attrition** \n
+
+#####Employees that are not able to balance thier work and personal life might go in search of better job. As can be seen from the following chart.
+```{r}
+ggplot(empdata2, aes(Attrition, group = WorkLifeBalance)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~WorkLifeBalance) + 
+  scale_y_continuous(labels = scales::percent)    
+```
+
+**NumCompaniesWorked vs Attrition** \n
+
+#####As we saw in table of proportion, people working with more than 4 companies show nearly twice as much of that of people worked in less than 4 companies.
+```{r}
+ggplot(empdata2, aes(Attrition, group = NumCompaniesWorked)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~NumCompaniesWorked) + 
+  scale_y_continuous(labels = scales::percent)   
+```
+
+**DistanceFromHome vs Attrition** \n
+
+#####As the distance from home goes on increasing, the chances of employee causing attrition are more.
+```{r}
+ggplot(empdata2, aes(Attrition, group = DistanceFromHome)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~DistanceFromHome) + 
+  scale_y_continuous(labels = scales::percent)   
+```
+
+**JobInvolvement vs Attrition** \n
+
+#####People who are not involved in Job, are more likely to cause attrition. 34.3% of the level 1 people  cause attrition.
+```{r}
+ggplot(empdata2, aes(Attrition, group = JobInvolvement)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y = ..prop..), stat = "count", vjust = -0.5) +
+  labs(y = "Percent", fill = "Attrition") +
+  facet_grid(~JobInvolvement) + 
+  scale_y_continuous(labels = scales::percent)
+```
+
+       
+#Association Rules Mining#
+
+**Importing the necessary libraries**
+```{r}
+library(arules)
+library(arulesViz)  
+```
+
+  
+#####To apply the "apriori" algorithm on a dataset, we need to tranform that datset into a "transaction matrix".  
+```{r}
+empmat <- as(empdata2, "transactions")
+#inspect(empmat)    #too much time
+```
+
+  
+  
+#####Plotting the item frequency plot of the transaction matrix data.
+```{r}
+par("mar")
+par(mar=c(1,1,1,1))
+#itemFrequency(empmat)
+#itemFrequencyPlot(empmat)
+```
+
+  
+#Mining the association rules for "Attrition=Yes"#
+
+#####Applying ARM model using default settings (support = 0.1, conf. = 0.8).
+```{r}
+default_Y <- apriori(empmat, 
+                         appearance = list(default="lhs", rhs=("Attrition=Yes")))
+```
+#####Baseline model returns 0 rules, so we need not plot the rules.
+
+#####Now, fine tune the model by setting hyperparameters.
+```{r}
+tuned_Y <- apriori(empmat, 
+                    parameter=list(support=0.031,confidence=0.6, minlen = 3, maxlen = 8),
+                   appearance = list(default="lhs", rhs=("Attrition=Yes")))
+```
+
+#####Sorting the rules generated by "apriori" algorithm  on the basis of lift value.
+```{r}
+rules_Y_sorted <- sort(tuned_Y, by="lift")
+```
+
+#####Display the top 5 rules sorted on the basis of lift value.
+```{r}
+#inspect(head(rules_Y_sorted, 5))
+inspectDT(head(rules_Y_sorted, 5))
+```
+
+#####Constructing a 2D plot to visually represent the association rules.
+```{r}
+plot(head(rules_Y_sorted, 5), method = "paracoord") # generate a plot for association rules
+```
+
+  
+#Mining the association rules for "Attrition=No"#
+  
+#####Applying ARM model using default settings (support = 0.1, conf. = 0.8).
+```{r}
+default_N <- apriori(empmat, 
+                       appearance = list(default="lhs", rhs=("Attrition=No")))
+```
+
+#####Because of the low value of support and confidence, this rules returns more than 5000 rules. We will check the top 5 rules generated by "apriori" algorithm sorted on the basis of lift value.
+```{r}
+default_N_sorted <- sort(default_N, by="lift")
+#inspect(head(default_N_sorted, 5))
+inspectDT(head(default_N_sorted, 5))
+```
+
+#####Now, fine tune the model by setting hyperparameters.
+```{r}
+tuned_N <- apriori(empmat, 
+                      parameter=list(support=0.1,confidence=0.97, minlen = 4, maxlen = 8),
+                      appearance = list(default="lhs", rhs=("Attrition=No")))
+```
+
+#####Sorting the rules generated by "apriori" algorithm  on the basis of lift value###
+```{r}
+rules_N_sorted <- sort(tuned_N, by="lift")
+```
+
+#####Display the top 5 rules generated by "apriori" algorithm sorted on the basis of lift value.
+```{r}
+#inspect(head(rules_N_sorted, 5))
+inspectDT(head(rules_N_sorted, 5))
+```
+
+#####Constructing a 2D plot to visually represent the association rules.
+```{r}
+plot(head(rules_N_sorted, 5), method = "paracoord") #generate a plot for association rules
+```
+
+#####Explanation: Why are these rules most interesting? 
+#####1] Support is defined as ratio of number of times LHS and RHS occured together divided by the total number of obserations.
+#####2] Confidence is defined as ratio of number of times LHS and RHS occured together divided by the number of times LHS occured.
+#####Paying close attention we observe that both of these values do not consider the proportion of RHS with respect to total number of observations. 
+#####3] Lift is defined as confidence divided by the support of RHS i.e. if the we consider the fact RHS can be associated with variables other than LHS. If the value of lift is high, then we can say that the rules generated are most practical rules.
+#####The rules that we have shortlisted have high confidence as well as high lift values. Hence, technically we consider these rules most interesting and significant.
